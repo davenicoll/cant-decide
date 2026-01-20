@@ -2,6 +2,14 @@
 
 A Flutter app that helps groups make decisions by randomly selecting one finger from multiple people touching the screen.
 
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/1.png" width="30%" />
+  <img src="screenshots/2.png" width="30%" />
+  <img src="screenshots/3.png" width="30%" />
+</p>
+
 ## How It Works
 
 1. Everyone places a finger on the screen
