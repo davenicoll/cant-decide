@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../models/touch_point.dart';
 
@@ -8,6 +9,7 @@ class FingerBlob extends StatefulWidget {
   final VoidCallback? onChosenAnimationComplete;
   final int remainingSeconds;
   final int totalSeconds;
+  final bool shouldFadeOut;
 
   const FingerBlob({
     super.key,
@@ -17,6 +19,7 @@ class FingerBlob extends StatefulWidget {
     this.onChosenAnimationComplete,
     required this.remainingSeconds,
     required this.totalSeconds,
+    this.shouldFadeOut = false,
   });
 
   @override
@@ -26,6 +29,7 @@ class FingerBlob extends StatefulWidget {
 class _FingerBlobState extends State<FingerBlob>
     with TickerProviderStateMixin {
   static const double baseSize = 150.0;
+  static const double blackHoleSize = 200.0;
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -35,6 +39,13 @@ class _FingerBlobState extends State<FingerBlob>
 
   late AnimationController _chosenController;
   late Animation<double> _scaleAnimation;
+
+  late AnimationController _blackHoleController;
+  late Animation<double> _blackHoleAnimation;
+  late Animation<double> _textOpacityAnimation;
+
+  late AnimationController _fadeOutController;
+  late Animation<double> _fadeOutAnimation;
 
   @override
   void initState() {
@@ -50,7 +61,7 @@ class _FingerBlobState extends State<FingerBlob>
     );
     _pulseController.repeat(reverse: true);
 
-    // Fade animation - quick fade to black
+    // Fade animation - quick fade to black (for losers)
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
@@ -77,6 +88,30 @@ class _FingerBlobState extends State<FingerBlob>
         widget.onChosenAnimationComplete?.call();
       }
     });
+
+    // Black hole animation - appears and grows slightly
+    _blackHoleController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _blackHoleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _blackHoleController, curve: Curves.easeOutCubic),
+    );
+    _textOpacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _blackHoleController,
+        curve: const Interval(0.5, 1.0, curve: Curves.easeIn),
+      ),
+    );
+
+    // Fade out animation - for end of round
+    _fadeOutController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _fadeOutAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(parent: _fadeOutController, curve: Curves.easeOut),
+    );
   }
 
   Duration _calculatePulseDuration() {
@@ -111,7 +146,18 @@ class _FingerBlobState extends State<FingerBlob>
           CurvedAnimation(parent: _chosenController, curve: Curves.easeOutCubic),
         );
         _chosenController.forward();
+        // Start black hole animation after a short delay
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) {
+            _blackHoleController.forward();
+          }
+        });
       }
+    }
+
+    // Handle fade out for end of round
+    if (widget.shouldFadeOut && !oldWidget.shouldFadeOut) {
+      _fadeOutController.forward();
     }
   }
 
@@ -120,6 +166,8 @@ class _FingerBlobState extends State<FingerBlob>
     _pulseController.dispose();
     _fadeController.dispose();
     _chosenController.dispose();
+    _blackHoleController.dispose();
+    _fadeOutController.dispose();
     super.dispose();
   }
 
@@ -130,6 +178,8 @@ class _FingerBlobState extends State<FingerBlob>
         _pulseController,
         _fadeController,
         _chosenController,
+        _blackHoleController,
+        _fadeOutController,
       ]),
       builder: (context, child) {
         double scale = _pulseAnimation.value;
@@ -140,22 +190,73 @@ class _FingerBlobState extends State<FingerBlob>
           opacity = _fadeAnimation.value;
         } else if (widget.touchPoint.state == TouchState.chosen) {
           scale = _scaleAnimation.value;
+          opacity = _fadeOutAnimation.value;
         }
 
-        return Positioned(
-          left: widget.touchPoint.position.dx - (baseSize * scale / 2),
-          top: widget.touchPoint.position.dy - (baseSize * scale / 2),
-          child: Opacity(
-            opacity: opacity,
-            child: Container(
-              width: baseSize * scale,
-              height: baseSize * scale,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: widget.touchPoint.color,
+        final isChosen = widget.touchPoint.state == TouchState.chosen;
+
+        return Stack(
+          children: [
+            // Main colored blob
+            Positioned(
+              left: widget.touchPoint.position.dx - (baseSize * scale / 2),
+              top: widget.touchPoint.position.dy - (baseSize * scale / 2),
+              child: Opacity(
+                opacity: opacity,
+                child: Container(
+                  width: baseSize * scale,
+                  height: baseSize * scale,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: widget.touchPoint.color,
+                  ),
+                ),
               ),
             ),
-          ),
+
+            // Black hole with text (only when chosen)
+            if (isChosen)
+              Positioned(
+                left: widget.touchPoint.position.dx - (blackHoleSize / 2),
+                top: widget.touchPoint.position.dy - (blackHoleSize / 2),
+                child: Opacity(
+                  opacity: opacity,
+                  child: Transform.scale(
+                    scale: _blackHoleAnimation.value,
+                    child: Container(
+                      width: blackHoleSize,
+                      height: blackHoleSize,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black,
+                      ),
+                      child: Center(
+                        child: Opacity(
+                          opacity: _textOpacityAnimation.value,
+                          child: Padding(
+                            padding: const EdgeInsets.all(20.0),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                'YOU ARE\nTHE CHOSEN\nONE',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: widget.touchPoint.color,
+                                  fontSize: 28,
+                                  fontFamily: 'MarkPro',
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.2,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );

@@ -23,66 +23,135 @@ class DecisionScreen extends StatefulWidget {
 }
 
 class _DecisionScreenState extends State<DecisionScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   static const int _countdownDuration = 10;
+  static const int _tickSoundCount = 24;
+  static const int _doneSoundCount = 26;
 
   final Map<int, TouchPoint> _touchPoints = {};
   late ColorPalette _colorPalette;
+  late Color _uiColor;
   GameState _gameState = GameState.waiting;
   Timer? _countdownTimer;
   int _remainingSeconds = _countdownDuration;
   int? _chosenPointerId;
+  bool _shouldFadeOut = false;
   final Random _random = Random();
 
-  // Use AudioPool for reliable repeated playback
-  AudioPlayer? _tickPlayer;
+  // Audio players for sounds
+  AudioPlayer? _donePlayer;
+  AudioPlayer? _preloadedTickPlayer;
+  final List<AudioPlayer> _activeTickPlayers = [];
   bool _audioReady = false;
+  int _currentTickSound = 1;
+  int _currentDoneSound = 1;
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+
+  late AnimationController _countdownProgressController;
 
   @override
   void initState() {
     super.initState();
     _colorPalette = ColorPalette.generate();
+    _uiColor = UIColor.random();
     _initAudio();
 
     _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 2000),
+      duration: const Duration(milliseconds: 1000),
       vsync: this,
     );
-    _pulseAnimation = Tween<double>(begin: 0.1, end: 0.25).animate(
+    _pulseAnimation = Tween<double>(begin: 0.4, end: 1.0).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
     _pulseController.repeat(reverse: true);
+
+    _countdownProgressController = AnimationController(
+      duration: Duration(seconds: _countdownDuration),
+      vsync: this,
+    );
   }
 
   Future<void> _initAudio() async {
-    _tickPlayer = AudioPlayer();
-    await _tickPlayer!.setSource(AssetSource('tick.mp3'));
-    await _tickPlayer!.setReleaseMode(ReleaseMode.stop);
+    _donePlayer = AudioPlayer();
+    await _donePlayer!.setReleaseMode(ReleaseMode.stop);
+  }
+
+  Future<void> _prepareRoundSounds() async {
+    _audioReady = false;
+
+    // Dispose any leftover tick players
+    for (final player in _activeTickPlayers) {
+      player.dispose();
+    }
+    _activeTickPlayers.clear();
+    _preloadedTickPlayer?.dispose();
+
+    // Randomly select sounds for this round
+    _currentTickSound = _random.nextInt(_tickSoundCount) + 1;
+    _currentDoneSound = _random.nextInt(_doneSoundCount) + 1;
+
+    // Create preloaded tick player for first tick
+    _preloadedTickPlayer = AudioPlayer();
+
+    // Preload both sounds in parallel
+    await Future.wait([
+      _preloadedTickPlayer!.setSource(AssetSource('tick_$_currentTickSound.mp3')),
+      _donePlayer!.setSource(AssetSource('done_$_currentDoneSound.mp3')),
+    ]);
+
     _audioReady = true;
   }
 
   @override
   void dispose() {
     _countdownTimer?.cancel();
-    _tickPlayer?.dispose();
+    for (final player in _activeTickPlayers) {
+      player.dispose();
+    }
+    _preloadedTickPlayer?.dispose();
+    _donePlayer?.dispose();
     _pulseController.dispose();
+    _countdownProgressController.dispose();
     super.dispose();
   }
 
   Future<void> _playTick() async {
-    // Play tick sound
-    if (_audioReady && _tickPlayer != null) {
-      await _tickPlayer!.seek(Duration.zero);
-      await _tickPlayer!.resume();
+    if (!_audioReady) return;
+
+    AudioPlayer tickPlayer;
+
+    // Use preloaded player for first tick (instant playback), create new for subsequent
+    if (_preloadedTickPlayer != null) {
+      tickPlayer = _preloadedTickPlayer!;
+      _preloadedTickPlayer = null;
+      tickPlayer.resume();
+    } else {
+      tickPlayer = AudioPlayer();
+      tickPlayer.play(AssetSource('tick_$_currentTickSound.mp3'));
     }
+
+    _activeTickPlayers.add(tickPlayer);
+
+    // Set up auto-cleanup when sound finishes
+    tickPlayer.onPlayerComplete.listen((_) {
+      _activeTickPlayers.remove(tickPlayer);
+      tickPlayer.dispose();
+    });
 
     // 50ms vibration
     final hasVibrator = await Vibration.hasVibrator();
     if (hasVibrator == true) {
       Vibration.vibrate(duration: 50);
+    }
+  }
+
+  Future<void> _playDone() async {
+    // Play done sound
+    if (_audioReady && _donePlayer != null) {
+      await _donePlayer!.seek(Duration.zero);
+      await _donePlayer!.resume();
     }
   }
 
@@ -127,33 +196,59 @@ class _DecisionScreenState extends State<DecisionScreen>
     _countdownTimer?.cancel();
 
     if (_touchPoints.length >= 2) {
+      final isNewRound = _gameState == GameState.waiting;
+
       setState(() {
         _gameState = GameState.countdown;
         _remainingSeconds = _countdownDuration;
       });
 
-      _playTick();
+      // Reset and start smooth progress animation
+      _countdownProgressController.value = 1.0;
+      _countdownProgressController.animateTo(0.0,
+        duration: Duration(seconds: _countdownDuration),
+        curve: Curves.linear,
+      );
 
-      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        setState(() {
-          _remainingSeconds--;
+      if (isNewRound) {
+        // Preload sounds for this round, then start countdown
+        _prepareRoundSounds().then((_) {
+          if (mounted && _gameState == GameState.countdown) {
+            _playTick();
+            _startCountdownTimer();
+          }
         });
-
-        if (_remainingSeconds > 0) {
-          _playTick();
-        }
-
-        if (_remainingSeconds <= 0) {
-          timer.cancel();
-          _triggerSelection();
-        }
-      });
+      } else {
+        // Sounds already loaded, just restart countdown
+        _playTick();
+        _startCountdownTimer();
+      }
     } else {
+      _countdownProgressController.stop();
+      _countdownProgressController.value = 1.0;
       setState(() {
         _gameState = GameState.waiting;
         _remainingSeconds = _countdownDuration;
       });
     }
+  }
+
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        _remainingSeconds--;
+      });
+
+      if (_remainingSeconds > 0) {
+        _playTick();
+      }
+
+      if (_remainingSeconds <= 0) {
+        timer.cancel();
+        _triggerSelection();
+      }
+    });
   }
 
   void _triggerSelection() {
@@ -164,6 +259,9 @@ class _DecisionScreenState extends State<DecisionScreen>
 
     // Haptic feedback
     HapticFeedback.heavyImpact();
+
+    // Play done sound
+    _playDone();
 
     final pointerIds = _touchPoints.keys.toList();
     final chosenId = pointerIds[_random.nextInt(pointerIds.length)];
@@ -195,10 +293,19 @@ class _DecisionScreenState extends State<DecisionScreen>
       _gameState = GameState.complete;
     });
 
-    // Hold for 3-4 seconds then reset
-    Future.delayed(const Duration(seconds: 3), () {
+    // Hold for 2 seconds, then trigger fade out
+    Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
-        _resetGame();
+        setState(() {
+          _shouldFadeOut = true;
+        });
+
+        // Wait for fade out animation (800ms) then reset
+        Future.delayed(const Duration(milliseconds: 800), () {
+          if (mounted) {
+            _resetGame();
+          }
+        });
       }
     });
   }
@@ -207,9 +314,11 @@ class _DecisionScreenState extends State<DecisionScreen>
     setState(() {
       _touchPoints.clear();
       _colorPalette = ColorPalette.generate();
+      _uiColor = UIColor.random();
       _gameState = GameState.waiting;
       _remainingSeconds = _countdownDuration;
       _chosenPointerId = null;
+      _shouldFadeOut = false;
     });
   }
 
@@ -257,19 +366,17 @@ class _DecisionScreenState extends State<DecisionScreen>
                   onChosenAnimationComplete: touchPoint.pointerId == _chosenPointerId
                       ? _onChosenAnimationComplete
                       : null,
+                  shouldFadeOut: _shouldFadeOut && touchPoint.pointerId == _chosenPointerId,
                 );
               }),
 
-              // Countdown indicator - centered, large, transparent, ignores touch
+              // Countdown indicator - centered, large, ignores touch
               if (_gameState == GameState.countdown || _gameState == GameState.waiting)
                 Positioned.fill(
                   child: IgnorePointer(
                     child: Center(
                       child: _gameState == GameState.countdown
-                          ? Opacity(
-                              opacity: 0.3,
-                              child: _buildCountdownIndicator(timerSize),
-                            )
+                          ? _buildCountdownIndicator(timerSize)
                           : _buildPulsingText(),
                     ),
                   ),
@@ -289,12 +396,12 @@ class _DecisionScreenState extends State<DecisionScreen>
         return Opacity(
           opacity: _pulseAnimation.value,
           child: Text(
-            'Place your fingers',
-            style: const TextStyle(
-              color: Colors.white,
+            'Waiting for everyone to touch',
+            style: TextStyle(
+              color: _uiColor,
               fontSize: 24,
-              fontFamily: 'SpecialGothicExpandedOne',
-              fontWeight: FontWeight.w400,
+              fontFamily: 'MarkPro',
+              fontWeight: FontWeight.w700,
             ),
           ),
         );
@@ -303,33 +410,38 @@ class _DecisionScreenState extends State<DecisionScreen>
   }
 
   Widget _buildCountdownIndicator(double size) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          SizedBox(
-            width: size,
-            height: size,
-            child: CircularProgressIndicator(
-              value: _remainingSeconds / _countdownDuration,
-              strokeWidth: size * 0.05,
-              backgroundColor: Colors.white10,
-              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-            ),
+    return AnimatedBuilder(
+      animation: _countdownProgressController,
+      builder: (context, child) {
+        return SizedBox(
+          width: size,
+          height: size,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              SizedBox(
+                width: size,
+                height: size,
+                child: CircularProgressIndicator(
+                  value: _countdownProgressController.value,
+                  strokeWidth: size * 0.05,
+                  backgroundColor: Colors.transparent,
+                  valueColor: AlwaysStoppedAnimation<Color>(_uiColor),
+                ),
+              ),
+              Text(
+                '$_remainingSeconds',
+                style: TextStyle(
+                  color: _uiColor,
+                  fontSize: size * 0.4,
+                  fontFamily: 'MarkPro',
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
-          Text(
-            '$_remainingSeconds',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: size * 0.4,
-              fontFamily: 'SpecialGothicExpandedOne',
-              fontWeight: FontWeight.w400,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

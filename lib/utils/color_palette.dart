@@ -37,3 +37,21 @@ class ColorPalette {
     _nextIndex = 0;
   }
 }
+
+class UIColor {
+  static final List<Color> _colors = [
+    Color(0xFF5B23FF), // Purple/Blue
+    Color(0xFF008BFF), // Blue
+    Color(0xFFE4FF30), // Yellow/Lime
+    Color(0xFF9929EA), // Purple
+    Color(0xFFFF0087), // Pink/Magenta
+    Color(0xFF48B3AF), // Teal
+    Color(0xFFF93827), // Red
+    Color(0xFFFF9D23), // Orange
+  ];
+
+  static Color random() {
+    final random = Random();
+    return _colors[random.nextInt(_colors.length)];
+  }
+}
