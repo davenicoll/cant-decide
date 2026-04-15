@@ -13,7 +13,7 @@ A Flutter app that helps groups make decisions by randomly selecting one finger 
 ## How It Works
 
 1. Everyone places a finger on the screen
-2. Once 2 or more fingers are detected, a 10-second countdown begins
+2. Once 2 or more fingers are detected, a 5-second countdown begins
 3. When the countdown ends, one finger is randomly chosen as the "winner"
 4. The losing fingers fade away while the winner is highlighted
 

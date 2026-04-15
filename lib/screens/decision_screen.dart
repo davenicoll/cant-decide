@@ -24,7 +24,7 @@ class DecisionScreen extends StatefulWidget {
 
 class _DecisionScreenState extends State<DecisionScreen>
     with TickerProviderStateMixin {
-  static const int _countdownDuration = 10;
+  static const int _countdownDuration = 5;
   static const int _tickSoundCount = 24;
   static const int _doneSoundCount = 26;
 
